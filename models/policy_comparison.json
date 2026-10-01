@@ -1,0 +1,99 @@
+{
+  "version": 3,
+  "sim_start": "2016-08-16",
+  "sim_end": "2017-08-15",
+  "lead_days": 3,
+  "review_days": 7,
+  "retrain_days": 91,
+  "results": [
+    {
+      "policy": "Store manager",
+      "z": null,
+      "fill_rate_%": 97.78101607499242,
+      "stockout_days_%": 5.087242003813596,
+      "lost_units": 6796940.4091792125,
+      "avg_inventory_units": 4690840.336128658,
+      "overstock_days_%": 3.1825180906487103
+    },
+    {
+      "policy": "Textbook",
+      "z": 0.5,
+      "fill_rate_%": 98.64154934873685,
+      "stockout_days_%": 3.5935567771120382,
+      "lost_units": 4161052.282257894,
+      "avg_inventory_units": 3956961.79202653,
+      "overstock_days_%": 3.4989349055775847
+    },
+    {
+      "policy": "ML",
+      "z": 0.5,
+      "fill_rate_%": 99.05943847657288,
+      "stockout_days_%": 2.6198929320812825,
+      "lost_units": 2881021.6035607904,
+      "avg_inventory_units": 3672709.1696042316,
+      "overstock_days_%": 3.7786518377865184
+    },
+    {
+      "policy": "Textbook",
+      "z": 1.0,
+      "fill_rate_%": 98.95585346762658,
+      "stockout_days_%": 2.4836246718950705,
+      "lost_units": 3198311.478966223,
+      "avg_inventory_units": 4371633.282752782,
+      "overstock_days_%": 4.730455317892789
+    },
+    {
+      "policy": "ML",
+      "z": 1.0,
+      "fill_rate_%": 99.41510321121538,
+      "stockout_days_%": 1.422200237751414,
+      "lost_units": 1791589.6433885838,
+      "avg_inventory_units": 4119018.99245479,
+      "overstock_days_%": 5.374298912566519
+    },
+    {
+      "policy": "Textbook",
+      "z": 1.645,
+      "fill_rate_%": 99.21172343544396,
+      "stockout_days_%": 1.6068166043034602,
+      "lost_units": 2414559.5535225286,
+      "avg_inventory_units": 4920012.640370112,
+      "overstock_days_%": 6.430776840778357
+    },
+    {
+      "policy": "ML",
+      "z": 1.645,
+      "fill_rate_%": 99.62266328283489,
+      "stockout_days_%": 0.7442097956773921,
+      "lost_units": 1155815.1241486822,
+      "avg_inventory_units": 4720889.78350291,
+      "overstock_days_%": 7.879464819971119
+    },
+    {
+      "policy": "Textbook",
+      "z": 2.33,
+      "fill_rate_%": 99.38083475090572,
+      "stockout_days_%": 1.0936565050542122,
+      "lost_units": 1896556.912422881,
+      "avg_inventory_units": 5513468.141089156,
+      "overstock_days_%": 8.355286777670514
+    },
+    {
+      "policy": "ML",
+      "z": 2.33,
+      "fill_rate_%": 99.72414202554866,
+      "stockout_days_%": 0.44630248681596607,
+      "lost_units": 844976.9250745157,
+      "avg_inventory_units": 5372052.911041406,
+      "overstock_days_%": 11.185326429500323
+    }
+  ],
+  "summary": {
+    "wape_ml_%": 8.953585948394236,
+    "wape_28d_avg_%": 10.404516473607487,
+    "z0.5_inventory_vs_textbook_equal_service_%": 20.04788787338225,
+    "z1.0_lost_sales_vs_textbook_equal_inventory_%": 52.66361914317421,
+    "z1.645_lost_sales_vs_textbook_equal_inventory_%": 57.17853414579513,
+    "z2.33_lost_sales_vs_textbook_equal_inventory_%": 58.16930154752564
+  }
+}
