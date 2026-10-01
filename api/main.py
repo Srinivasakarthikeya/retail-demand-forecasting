@@ -4,6 +4,7 @@ Run:  uvicorn api.main:app --reload
 Docs: http://localhost:8000/docs
 """
 import json
+import os
 from contextlib import asynccontextmanager
 from datetime import date
 from pathlib import Path
@@ -46,9 +47,11 @@ app = FastAPI(
     description="Demand forecasts, reorder recommendations, stock alerts and what-if analysis "
                 "for 54 stores x 33 product families (Corporacion Favorita data).",
 )
+# Comma-separated list, e.g. "http://localhost:5173,https://shelfiq.example.com"
+CORS_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173,http://localhost:8080")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000"],
+    allow_origins=[o.strip() for o in CORS_ORIGINS.split(",") if o.strip()],
     allow_methods=["*"],
     allow_headers=["*"],
 )

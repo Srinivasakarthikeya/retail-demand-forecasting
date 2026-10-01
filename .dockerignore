@@ -1,0 +1,10 @@
+.git
+.venv
+.env
+**/__pycache__
+**/.ipynb_checkpoints
+data
+notebooks
+frontend
+models/*.txt
+tests

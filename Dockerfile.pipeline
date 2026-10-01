@@ -1,0 +1,11 @@
+# Batch pipeline: load data, simulate inventory, train models, write recommendations.
+FROM python:3.12-slim
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+RUN apt-get update && apt-get install -y --no-install-recommends libgomp1 && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+
+COPY requirements-pipeline.txt .
+RUN pip install --no-cache-dir -r requirements-pipeline.txt
+
+COPY scripts ./scripts
+CMD ["bash", "scripts/run_pipeline.sh"]

@@ -1,3 +1,7 @@
+# docker compose up -d --build     -> database + API (:8000) + dashboard (:8080)
+# docker compose --profile pipeline run --rm pipeline   -> (re)load data and retrain
+x-db-url: &db-url postgresql://${POSTGRES_USER:-retail}:${POSTGRES_PASSWORD:-retail}@db:5432/${POSTGRES_DB:-retail}
+
 services:
   db:
     image: postgres:16
@@ -11,5 +15,52 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./db/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-retail} -d ${POSTGRES_DB:-retail}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: retail_api
+    environment:
+      DATABASE_URL: *db-url
+      CORS_ORIGINS: http://localhost:8080,http://localhost:5173,http://127.0.0.1:5173
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_URL: http://localhost:8000
+    container_name: retail_web
+    ports:
+      - "8080:80"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+  pipeline:
+    profiles: ["pipeline"]
+    build:
+      context: .
+      dockerfile: Dockerfile.pipeline
+    environment:
+      DATABASE_URL: *db-url
+    volumes:
+      - ./data:/app/data
+      - ./models:/app/models
+    depends_on:
+      db:
+        condition: service_healthy
+
 volumes:
   pgdata:
