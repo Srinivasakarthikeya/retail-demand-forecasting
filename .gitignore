@@ -6,3 +6,5 @@ __pycache__/
 *.pyc
 .ipynb_checkpoints/
 models/*.txt
+frontend/node_modules/
+frontend/dist/

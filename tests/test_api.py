@@ -3,7 +3,7 @@ from fastapi.testclient import TestClient
 
 from api.main import app
 
-client = TestClient(app)
+client = TestClient(app).__enter__()   # runs startup (seeds family_prices)
 
 
 def test_health():
@@ -46,3 +46,21 @@ def test_whatif_promotion_raises_order():
 
 def test_whatif_unknown_item_404():
     assert client.post("/whatif", json={"store_nbr": 9999, "family": "NOPE"}).status_code == 404
+
+
+def test_inr_kpis_and_trend():
+    k = client.get("/kpis").json()
+    assert k["sales_inr_28d"] > k["sales_last_28d"]          # every price is > 1 INR
+    fc = client.get("/forecasts", params={"metric": "inr"}).json()
+    assert len(fc["forecast"]) == 16
+
+
+def test_departments_sum_to_100():
+    rows = client.get("/analytics/departments").json()
+    assert abs(sum(r["share_pct"] for r in rows) - 100) < 1
+
+
+def test_store_types_and_spikes():
+    assert len(client.get("/analytics/store-types").json()) > 0
+    s = client.get("/analytics/spikes").json()
+    assert {"count", "items"} <= s.keys()

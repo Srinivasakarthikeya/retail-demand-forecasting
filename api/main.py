@@ -4,6 +4,7 @@ Run:  uvicorn api.main:app --reload
 Docs: http://localhost:8000/docs
 """
 import json
+from contextlib import asynccontextmanager
 from datetime import date
 from pathlib import Path
 from statistics import NormalDist
@@ -13,14 +14,33 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from api.db import fetch_all, fetch_one
+from api.db import connect, fetch_all, fetch_one
+from api.prices import DEFAULT, FAMILY_PRICES
 
 ROOT = Path(__file__).resolve().parent.parent
 LEAD_DAYS, REVIEW_DAYS = 3, 7           # must match scripts/replenish.py
 BASE_Z = 1.645
 Status = Literal["LOW_STOCK", "REORDER", "OVERSTOCK", "OK"]
 
+@asynccontextmanager
+async def lifespan(_app):
+    """Create/refresh the family_prices table (assumed INR prices) on startup."""
+    with connect() as conn, conn.cursor() as cur:
+        cur.execute("""CREATE TABLE IF NOT EXISTS family_prices (
+                         family TEXT PRIMARY KEY, department TEXT NOT NULL, price_inr NUMERIC(10,2) NOT NULL)""")
+        cur.execute("SELECT DISTINCT family FROM sales")
+        families = [r["family"] for r in cur.fetchall()]
+        for f in families:
+            dept, price = FAMILY_PRICES.get(f, DEFAULT)
+            cur.execute("""INSERT INTO family_prices VALUES (%s, %s, %s)
+                           ON CONFLICT (family) DO UPDATE SET department = EXCLUDED.department,
+                                                              price_inr = EXCLUDED.price_inr""", (f, dept, price))
+        conn.commit()
+    yield
+
+
 app = FastAPI(
+    lifespan=lifespan,
     title="Smart Retail Demand Forecasting API",
     version="1.0.0",
     description="Demand forecasts, reorder recommendations, stock alerts and what-if analysis "
@@ -133,10 +153,16 @@ def kpis():
     trend = fetch_one("""
         WITH m AS (SELECT MAX(date) AS d FROM sales)
         SELECT
-          SUM(sales) FILTER (WHERE date >  m.d - 28)                      AS last_28d,
-          SUM(sales) FILTER (WHERE date <= m.d - 28 AND date > m.d - 56)  AS prev_28d,
+          SUM(s.sales) FILTER (WHERE date >  m.d - 28)                                  AS last_28d,
+          SUM(s.sales) FILTER (WHERE date <= m.d - 28 AND date > m.d - 56)              AS prev_28d,
+          SUM(s.sales * p.price_inr) FILTER (WHERE date >  m.d - 28)                    AS inr_28d,
+          SUM(s.sales * p.price_inr) FILTER (WHERE date <= m.d - 28 AND date > m.d - 56) AS inr_prev,
           MAX(m.d) AS as_of
-        FROM sales, m WHERE date > m.d - 56
+        FROM sales s JOIN family_prices p USING (family), m WHERE date > m.d - 56
+    """)
+    lines = fetch_one("""
+        SELECT COUNT(*) AS total, COUNT(*) FILTER (WHERE on_hand > 0) AS in_stock
+        FROM reorder_recommendations WHERE run_date = (SELECT MAX(run_date) FROM reorder_recommendations)
     """)
     run = _latest_run()
     status = {r["status"]: r["n"] for r in fetch_all(
@@ -144,12 +170,17 @@ def kpis():
     units = fetch_one("SELECT COALESCE(SUM(order_qty), 0) AS u FROM reorder_recommendations WHERE run_date = %s", (run,))
 
     last, prev = float(trend["last_28d"] or 0), float(trend["prev_28d"] or 0)
+    inr, inr_prev = float(trend["inr_28d"] or 0), float(trend["inr_prev"] or 0)
     forecaster = _read_json("lgbm_v1_metrics.json")
     policy = _read_json("policy_comparison.json")
     return {
         "as_of": trend["as_of"],
         "sales_last_28d": last,
         "sales_change_pct": round(100 * (last / prev - 1), 2) if prev else None,
+        "sales_inr_28d": inr,
+        "sales_inr_change_pct": round(100 * (inr / inr_prev - 1), 2) if inr_prev else None,
+        "lines_total": lines["total"],
+        "lines_in_stock": lines["in_stock"],
         "recommendation_run": run,
         "alerts": {s: status.get(s, 0) for s in ["LOW_STOCK", "REORDER", "OVERSTOCK", "OK"]},
         "units_to_order": float(units["u"]),
@@ -173,19 +204,24 @@ def sales(store_nbr: int | None = None, family: str | None = None,
 
 @app.get("/forecasts", tags=["dashboard"])
 def forecasts(store_nbr: int | None = None, family: str | None = None,
-              history_days: int = Query(60, ge=7, le=365)):
-    """Actuals for the last `history_days`, the 16-day backtest, and the 16-day forecast."""
-    where, params = _filters(store_nbr, family)
+              history_days: int = Query(60, ge=7, le=365),
+              metric: Literal["units", "inr"] = "units"):
+    """Actuals for the last `history_days`, the 16-day backtest, and the 16-day forecast.
+    metric=inr multiplies units by the assumed price per family."""
+    where, params = _filters(store_nbr, family, alias="t")
     params["h"] = history_days
+    mult = "* p.price_inr" if metric == "inr" else ""
     actual = fetch_all(f"""
-        SELECT date, SUM(sales)::float8 AS value FROM sales
-        WHERE date > (SELECT MAX(date) FROM sales) - %(h)s {where}
-        GROUP BY date ORDER BY date
+        SELECT t.date, SUM(t.sales {mult})::float8 AS value
+        FROM sales t JOIN family_prices p USING (family)
+        WHERE t.date > (SELECT MAX(date) FROM sales) - %(h)s {where}
+        GROUP BY t.date ORDER BY t.date
     """, params)
     fc = fetch_all(f"""
-        SELECT date, model_version, SUM(predicted)::float8 AS value FROM forecasts
-        WHERE model_version IN ('lgbm_v1', 'lgbm_v1_backtest') {where}
-        GROUP BY date, model_version ORDER BY date
+        SELECT t.date, t.model_version, SUM(t.predicted {mult})::float8 AS value
+        FROM forecasts t JOIN family_prices p USING (family)
+        WHERE t.model_version IN ('lgbm_v1', 'lgbm_v1_backtest') {where}
+        GROUP BY t.date, t.model_version ORDER BY t.date
     """, params)
     return {
         "actual": actual,
@@ -263,11 +299,14 @@ def store_analytics(days: int = Query(28, ge=7, le=365)):
 @app.get("/analytics/families", tags=["analytics"])
 def family_analytics(days: int = Query(28, ge=7, le=365)):
     return fetch_all("""
-        WITH s AS (
-            SELECT family, SUM(sales) AS sales,
-                   AVG(sales) FILTER (WHERE onpromotion > 0) AS promo_avg,
-                   AVG(sales) FILTER (WHERE onpromotion = 0) AS base_avg
-            FROM sales WHERE date > (SELECT MAX(date) FROM sales) - %(days)s GROUP BY family
+        WITH m AS (SELECT MAX(date) AS d FROM sales),
+        s AS (
+            SELECT family,
+                   SUM(sales) FILTER (WHERE date > m.d - %(days)s) AS sales,
+                   SUM(sales) FILTER (WHERE date <= m.d - %(days)s) AS prev_sales,
+                   AVG(sales) FILTER (WHERE date > m.d - %(days)s AND onpromotion > 0) AS promo_avg,
+                   AVG(sales) FILTER (WHERE date > m.d - %(days)s AND onpromotion = 0) AS base_avg
+            FROM sales, m WHERE date > m.d - 2 * %(days)s GROUP BY family
         ),
         r AS (
             SELECT family,
@@ -277,13 +316,57 @@ def family_analytics(days: int = Query(28, ge=7, le=365)):
             WHERE run_date = (SELECT MAX(run_date) FROM reorder_recommendations)
             GROUP BY family
         )
-        SELECT s.family, s.sales::float8,
+        SELECT s.family, p.department, s.sales::float8,
+               (s.sales * p.price_inr)::float8 AS sales_inr,
                ROUND((100 * s.sales / SUM(s.sales) OVER ())::numeric, 2)::float8 AS share_pct,
+               ROUND((100 * (s.sales / NULLIF(s.prev_sales, 0) - 1))::numeric, 1)::float8 AS growth_pct,
                ROUND((s.promo_avg / NULLIF(s.base_avg, 0))::numeric, 2)::float8 AS promo_lift,
                COALESCE(r.low_stock, 0)::int AS low_stock, COALESCE(r.overstock, 0)::int AS overstock
-        FROM s LEFT JOIN r USING (family)
-        ORDER BY s.sales DESC
+        FROM s JOIN family_prices p USING (family) LEFT JOIN r USING (family)
+        ORDER BY sales_inr DESC
     """, {"days": days})
+
+
+@app.get("/analytics/departments", tags=["analytics"])
+def department_analytics(days: int = Query(28, ge=7, le=365)):
+    return fetch_all("""
+        SELECT p.department, SUM(s.sales * p.price_inr)::float8 AS sales_inr,
+               ROUND((100 * SUM(s.sales * p.price_inr) / SUM(SUM(s.sales * p.price_inr)) OVER ())::numeric, 1)::float8 AS share_pct
+        FROM sales s JOIN family_prices p USING (family)
+        WHERE s.date > (SELECT MAX(date) FROM sales) - %(days)s
+        GROUP BY p.department ORDER BY sales_inr DESC
+    """, {"days": days})
+
+
+@app.get("/analytics/store-types", tags=["analytics"])
+def store_type_analytics(days: int = Query(28, ge=7, le=365)):
+    return fetch_all("""
+        SELECT st.type, COUNT(DISTINCT st.store_nbr)::int AS stores,
+               SUM(s.sales * p.price_inr)::float8 AS sales_inr,
+               ROUND((100 * SUM(s.sales * p.price_inr) / SUM(SUM(s.sales * p.price_inr)) OVER ())::numeric, 1)::float8 AS share_pct
+        FROM sales s JOIN stores st USING (store_nbr) JOIN family_prices p USING (family)
+        WHERE s.date > (SELECT MAX(date) FROM sales) - %(days)s
+        GROUP BY st.type ORDER BY sales_inr DESC
+    """, {"days": days})
+
+
+@app.get("/analytics/spikes", tags=["analytics"])
+def demand_spikes(threshold: float = Query(1.5, ge=1.1, le=10), limit: int = Query(5, ge=1, le=100)):
+    """Store x family lines whose last-7-day average is >= threshold x their previous 28-day average."""
+    rows = fetch_all("""
+        WITH m AS (SELECT MAX(date) AS d FROM sales),
+        a AS (
+            SELECT store_nbr, family,
+                   AVG(sales) FILTER (WHERE date > m.d - 7) AS recent,
+                   AVG(sales) FILTER (WHERE date <= m.d - 7) AS normal
+            FROM sales, m WHERE date > m.d - 35 GROUP BY store_nbr, family
+        )
+        SELECT store_nbr, family, recent::float8 AS recent_daily, normal::float8 AS normal_daily,
+               ROUND((100 * (recent / normal - 1))::numeric, 0)::float8 AS change_pct
+        FROM a WHERE normal >= 5 AND recent >= %(t)s * normal
+        ORDER BY recent / normal DESC
+    """, {"t": threshold})
+    return {"count": len(rows), "threshold": threshold, "items": rows[:limit]}
 
 
 @app.post("/whatif", response_model=WhatIfResponse, tags=["inventory"])
